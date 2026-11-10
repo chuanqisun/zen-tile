@@ -1,3 +1,3 @@
-# React + TypeScript + Vite
+# Skepture
 
 Make a sculpture by sketching
