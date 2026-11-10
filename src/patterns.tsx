@@ -1,18 +1,19 @@
 import type { ReactNode } from "react";
+import { INK, PAPER } from "./theme";
 import { mulberry32, SESSION_SEED, hashString } from "./random";
 import type { ShapeId } from "./tiling";
 
 /**
- * Black/white tile fills, generated from code.
+ * Two-tone (ink on paper, see theme.ts) tile fills, generated from code.
  *
- * Shared grammar so the set reads as one family: a ~24px module, pure black on pure white,
+ * Shared grammar so the set reads as one family: a ~24px module, pure ink on pure paper,
  * one stroke weight (SW), round/flat geometry only, and every pattern is a seamless tile.
  * Each pattern is keyed to its shape (the sides, the acute angle, or the golden-ish Fibonacci
  * rhythm) so no two tiles look alike.
  */
 
 const SW = 3;
-const ink = "black";
+const ink = INK;
 
 type PatternDef = { w: number; h: number; rotate?: number; body: ReactNode };
 
@@ -181,7 +182,7 @@ const rhombusDiamonds = (r: Rand): PatternDef => {
     body: (
       <g>
         {radii.map((rad, k) => (
-          <polygon key={k} points={diamond(rad)} fill={k % 2 === 0 ? ink : "white"} />
+          <polygon key={k} points={diamond(rad)} fill={k % 2 === 0 ? ink : PAPER} />
         ))}
       </g>
     ),
@@ -203,7 +204,7 @@ const rhombusTriangles = (r: Rand): PatternDef => {
     body: (
       <g>
         <polygon points={`0,${h} ${w / 2},0 ${w},${h}`} fill={ink} />
-        {hollow && <polygon points={inner} fill="white" />}
+        {hollow && <polygon points={inner} fill={PAPER} />}
       </g>
     ),
   };
@@ -263,7 +264,7 @@ export function TilePatternDefs({ tiles }: { tiles: TileRef[] }) {
               patternUnits="userSpaceOnUse"
               patternTransform={rotate ? `rotate(${rotate})` : undefined}
             >
-              <rect width={w} height={h} fill="white" />
+              <rect width={w} height={h} fill={PAPER} />
               {body}
             </pattern>
           );

@@ -12,16 +12,17 @@ import {
   translate,
   Vec2,
 } from "dragology";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import "./App.css";
-import { getHandDrawnPaths } from "./handdrawn";
-import { getTileFill, TilePatternDefs } from "./patterns";
+import { INK, type Theme } from "./theme";
+import { sound } from "./sound";
+import { TilePatternDefs } from "./patterns";
+import { TileBody } from "./TileBody";
 import { makePolygonStrokeTemplates, pathLength, recognizeDollar1 } from "./dollar1";
 import {
   computeUpdatedPalette,
   getBoundaryEdges,
   getPolygonPoints,
-  getLocalVertices,
   getValidPlacements,
   getWorldEdges,
   getWorldVertices,
@@ -32,6 +33,14 @@ import {
 } from "./tiling";
 
 const SNAP_GAP = 60;
+// Animate the dragged tile (e.g. its rotation) when the closest target changes, instead of snapping.
+const BRANCH_MS = 150;
+
+/** Palette tiles start at angle 0, so use the equivalent angle in (-180, 180]: transitions turn the short way round. */
+const shortestAngle = (deg: number) => {
+  const a = ((deg % 360) + 360) % 360;
+  return a > 180 ? a - 360 : a;
+};
 
 type PointerSink = { current: Vec2 | null };
 
@@ -51,7 +60,8 @@ class TrackPointer<T extends object> extends Modifier<T> {
   }
 }
 const trackPointer = modifier(TrackPointer);
-const PALETTE_WIDTH = 160;
+// Bottom strip, in the thumb zone. Tiles wrap to two rows on narrow screens.
+const PALETTE_HEIGHT = 132;
 
 type Viewport = {
   width: number;
@@ -67,8 +77,8 @@ type State = {
 };
 
 const getCanvasCenter = ({ width, height }: Viewport) => ({
-  x: PALETTE_WIDTH + (width - PALETTE_WIDTH) / 2,
-  y: height / 2,
+  x: width / 2,
+  y: (height - PALETTE_HEIGHT) / 2,
 });
 
 const getPlacementsForType = (state: State, type: ShapeId, boundaryEdges = getBoundaryEdges(state.shapes)): PlacedShape[] => {
@@ -131,14 +141,21 @@ const getCanvasTemplates = (state: State) => {
   return templateCache.templates;
 };
 
-const getPaletteItemTransform = (index: number, total: number, type: ShapeId, viewportHeight: number) => {
-  const x = PALETTE_WIDTH / 2;
-  const topMargin = 65;
-  const bottomMargin = Math.max(topMargin + 100, viewportHeight - 65);
-  const spacing = total <= 1 ? 0 : Math.min(105, (bottomMargin - topMargin) / (total - 1));
-  const y = total <= 1 ? 120 : topMargin + index * spacing;
+const getPaletteItemTransform = (index: number, total: number, type: ShapeId, { width, height }: Viewport) => {
+  const margin = 24;
+  const minSpacing = 68;
+  const rows = total * minSpacing > width - 2 * margin ? 2 : 1;
+  const perRow = Math.ceil(total / rows);
+  const row = Math.floor(index / perRow);
+  const col = index % perRow;
+  const countInRow = Math.min(perRow, total - row * perRow); // the last row is centered
+  const spacing = Math.min(100, (width - 2 * margin) / perRow);
+  const rowHeight = PALETTE_HEIGHT / rows;
+
+  const x = width / 2 + (col - (countInRow - 1) / 2) * spacing;
+  const y = height - PALETTE_HEIGHT + rowHeight * (row + 0.5);
   const { boundingRadius } = SHAPE_DEF_MAP[type];
-  const maxRadius = Math.min(44, spacing > 0 ? spacing * 0.42 : 44);
+  const maxRadius = Math.min(44, spacing * 0.42, rowHeight * 0.42);
   const scaleFactor = boundingRadius > maxRadius ? maxRadius / boundingRadius : 1;
 
   return { x, y, scaleFactor };
@@ -158,9 +175,8 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
     <g>
       <rect
         id="sketch-surface"
-        transform={translate(PALETTE_WIDTH, 0)}
-        width={Math.max(0, viewW - PALETTE_WIDTH)}
-        height={viewH}
+        width={viewW}
+        height={Math.max(0, viewH - PALETTE_HEIGHT)}
         fill="transparent"
         style={{ cursor: "crosshair" }}
         dragologyOnDrag={() => {
@@ -168,6 +184,7 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
 
           return d
             .custom((ctx) => (frame) => {
+              sound.drawingActivity();
               if (pts.length === 0 || pts[pts.length - 1].dist(frame.pointer) > 2) {
                 pts.push(frame.pointer);
               }
@@ -186,20 +203,18 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
         }}
       />
 
-      <line x1={PALETTE_WIDTH} y1={0} x2={PALETTE_WIDTH} y2={viewH} stroke="black" />
+      <line x1={0} y1={viewH - PALETTE_HEIGHT} x2={viewW} y2={viewH - PALETTE_HEIGHT} stroke={INK} />
 
       {state.shapes.map((shape, i) => {
-        const paths = getHandDrawnPaths(getLocalVertices(shape.type), shape.id, shape.shared);
         return (
           <g
             id={shape.id}
-            transform={translate(shape.x, shape.y) + rotateDeg(shape.angle)}
+            transform={translate(shape.x, shape.y)}
             // Older tiles sit above newer ones, so existing edges win over a new tile's straight shared edge.
             dragologyZIndex={draggedId === shape.id ? "/1" : -i}
             style={{ pointerEvents: "none" }}
           >
-            <path d={paths.fill} fill={getTileFill(shape.id)} />
-            <path d={paths.stroke} fill="none" stroke="black" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+            <TileBody tileId={shape.id} type={shape.type} shared={shape.shared} angle={shape.angle} animate={draggedId === shape.id} />
           </g>
         );
       })}
@@ -210,7 +225,7 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
           transform={translate(previewPlacement.x, previewPlacement.y) + rotateDeg(previewPlacement.angle)}
           style={{ pointerEvents: "none" }}
         >
-          <polygon points={getPolygonPoints(previewPlacement.type)} fill="none" stroke="black" strokeDasharray="4 4" vectorEffect="non-scaling-stroke" />
+          <polygon points={getPolygonPoints(previewPlacement.type)} fill="none" stroke={INK} strokeDasharray="4 4" vectorEffect="non-scaling-stroke" />
         </g>
       )}
 
@@ -219,7 +234,7 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
           id="active-sketch-stroke"
           points={state.sketchPoints.map((p) => `${p.x},${p.y}`).join(" ")}
           fill="none"
-          stroke="#d00000"
+          stroke={INK}
           strokeWidth={2}
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -228,7 +243,7 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
       )}
 
       {state.availableTypes.map((type, idx) => {
-        const { x, y, scaleFactor } = getPaletteItemTransform(idx, state.availableTypes.length, type, viewH);
+        const { x, y, scaleFactor } = getPaletteItemTransform(idx, state.availableTypes.length, type, state.viewport);
         const id = `shape-${type}-${state.nextId[type] ?? 1}`;
         const isDragged = draggedId === id;
 
@@ -253,38 +268,72 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
                   const nearby = key === "" ? [] : key.split(",").map((i) => ({ i: Number(i), placed: validTargets[Number(i)] }));
                   // Drag-and-drop places the full tile: drop the shared-edge marks so every edge is drawn.
                   // (Sketch placements keep them, since the user omits edges they consider implicit.)
-                  const targetStates = nearby.length ? nearby.map(({ placed }) => applyPlacedShape(state, { ...placed, shared: undefined })) : [state];
+                  const targetStates = nearby.length
+                    ? nearby.map(({ placed }) => applyPlacedShape(state, { ...placed, angle: shortestAngle(placed.angle), shared: undefined }))
+                    : [state];
 
                   const overlay = (
                     <g>
                       {nearby.map(({ i, placed: t }) => (
                         <g id={`ghost-${i}`} transform={translate(t.x, t.y) + rotateDeg(t.angle)}>
-                          <polygon points={getPolygonPoints(t.type)} fill="none" stroke="black" strokeDasharray="4 4" />
+                          <polygon points={getPolygonPoints(t.type)} fill="none" stroke={INK} strokeDasharray="4 4" />
                         </g>
                       ))}
                     </g>
                   );
 
-                  return d.closest(targetStates).whenFar(state, { gap: SNAP_GAP }).withFloating().withOverlay(overlay).onDrop(finalizePlacedState);
+                  return d
+                    .closest(targetStates)
+                    .withBranchTransition(BRANCH_MS)
+                    .whenFar(state, { gap: SNAP_GAP })
+                    .withBranchTransition(BRANCH_MS)
+                    .withFloating()
+                    .withOverlay(overlay)
+                    .onDrop(finalizePlacedState);
                 })
                 .with(trackPointer(pointer));
             }}
           >
-            <path d={getHandDrawnPaths(getLocalVertices(type), id).fill} fill={getTileFill(id)} />
-            <path
-              d={getHandDrawnPaths(getLocalVertices(type), id).stroke}
-              fill="none"
-              stroke="black"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              vectorEffect="non-scaling-stroke"
-            />
+            <TileBody tileId={id} type={type} angle={0} animate={isDragged} />
           </g>
         );
       })}
     </g>
   );
 };
+
+const getInitialTheme = (): Theme => (localStorage.getItem("theme") === "light" ? "light" : "dark");
+
+function SoundToggle() {
+  const on = useSyncExternalStore(sound.subscribe, sound.isEnabled);
+  // Bars when sound is on, a flat row of dots when it's off.
+  const bars = [4, 9, 6];
+
+  return (
+    <button className="icon-toggle sound-toggle" aria-label={on ? "Turn sound off" : "Turn sound on"} aria-pressed={on} onClick={() => sound.setEnabled(!on)}>
+      <svg width={12} height={12} viewBox="0 0 12 12" aria-hidden>
+        {bars.map((h, i) =>
+          on ? (
+            <rect x={1 + i * 4} y={6 - h / 2} width={2} height={h} rx={1} fill="currentColor" />
+          ) : (
+            <circle cx={2 + i * 4} cy={6} r={1.1} fill="currentColor" />
+          ),
+        )}
+      </svg>
+    </button>
+  );
+}
+
+function ThemeToggle() {
+  const [theme, setTheme] = useState<Theme>(getInitialTheme);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("theme", theme);
+  }, [theme]);
+
+  return <button className="icon-toggle theme-toggle" aria-label="Toggle light/dark theme" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} />;
+}
 
 export function App() {
   const [state, setState] = useState<State>(() => ({
@@ -317,8 +366,47 @@ export function App() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+  // Sound: retry anything the browser blocked before the first gesture, stop the drawing loop when the pen lifts,
+  // and pause the music while the tab is hidden.
+  useEffect(() => {
+    const unlock = () => sound.unlock();
+    const stopDrawing = () => sound.stopDrawing();
+    const onVisibility = () => sound.setHidden(document.hidden);
+
+    window.addEventListener("pointerdown", unlock);
+    window.addEventListener("pointerup", stopDrawing);
+    window.addEventListener("pointercancel", stopDrawing);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("pointerup", stopDrawing);
+      window.removeEventListener("pointercancel", stopDrawing);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
+  // Both drag-and-drop and sketching end here, so a new tile is where its sound plays.
+  const handleDrop = (next: State) => {
+    if (next.shapes.length > state.shapes.length) sound.playFill();
+    setState(next);
+  };
+
+  // Mobile: no page zoom, scroll or context menu while drawing and dragging. CSS (touch-action) covers
+  // most browsers; these cover Safari's pinch gestures and rubber-banding.
+  useEffect(() => {
+    const block = (e: Event) => e.preventDefault();
+    const opts = { passive: false } as const;
+    const events = ["gesturestart", "gesturechange", "gestureend", "touchmove", "contextmenu", "dblclick"];
+    for (const name of events) document.addEventListener(name, block, opts);
+    return () => {
+      for (const name of events) document.removeEventListener(name, block);
+    };
+  }, []);
+
   return (
     <>
+      <SoundToggle />
+      <ThemeToggle />
       <TilePatternDefs
         tiles={[
           ...state.shapes,
@@ -328,7 +416,7 @@ export function App() {
           })),
         ]}
       />
-      <DraggableRenderer draggable={sculptureDraggable} state={state} onDropState={setState} width={state.viewport.width} height={state.viewport.height} />
+      <DraggableRenderer draggable={sculptureDraggable} state={state} onDropState={handleDrop} width={state.viewport.width} height={state.viewport.height} />
     </>
   );
 }
