@@ -15,7 +15,7 @@ import {
 import { useEffect, useState, useSyncExternalStore } from "react";
 import "./App.css";
 import { INK, type Theme } from "./theme";
-import { sound } from "./sound";
+import { sound, SOUND_MODES, type SoundMode } from "./sound";
 import { TilePatternDefs } from "./patterns";
 import { TileBody } from "./TileBody";
 import { makePolygonStrokeTemplates, pathLength, recognizeDollar1 } from "./dollar1";
@@ -326,16 +326,46 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
 
 const getInitialTheme = (): Theme => (localStorage.getItem("theme") === "light" ? "light" : "dark");
 
+const SOUND_LABELS: Record<SoundMode, string> = { off: "silent", sfx: "sound effects only", all: "sound effects and music" };
+
 function SoundToggle() {
-  const on = useSyncExternalStore(sound.subscribe, sound.isEnabled);
-  // Bars when sound is on, a flat row of dots when it's off.
-  const bars = [4, 9, 6];
+  const mode = useSyncExternalStore(sound.subscribe, sound.getMode);
+  const next = SOUND_MODES[(SOUND_MODES.indexOf(mode) + 1) % SOUND_MODES.length];
 
   return (
-    <button className="icon-toggle sound-toggle" aria-label={on ? "Turn sound off" : "Turn sound on"} aria-pressed={on} onClick={() => sound.setEnabled(!on)}>
+    <button
+      className="icon-toggle sound-toggle"
+      aria-label={`Sound: ${SOUND_LABELS[mode]}. Switch to ${SOUND_LABELS[next]}`}
+      onClick={() => sound.setMode(next)}
+    >
       <svg width={12} height={12} viewBox="0 0 12 12" aria-hidden>
-        {bars.map((h, i) =>
-          on ? (
+        {mode === "off" && (
+          // Silence: a cross.
+          <path d="M3.5 3.5 L8.5 8.5 M8.5 3.5 L3.5 8.5" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" fill="none" />
+        )}
+        {mode === "sfx" && (
+          // Effects only: a flowing sine line.
+          <g>
+            <clipPath id="sound-wave-clip">
+              <rect x={0} y={0} width={12} height={12} />
+            </clipPath>
+            <g clipPath="url(#sound-wave-clip)">
+              <g className="sound-wave-swell">
+                <path
+                  className="sound-wave"
+                  d="M-6 6 q1.5 -6 3 0 t3 0 t3 0 t3 0 t3 0 t3 0 t3 0 t3 0"
+                  stroke="currentColor"
+                  strokeWidth={1.4}
+                  strokeLinecap="round"
+                  fill="none"
+                />
+              </g>
+            </g>
+          </g>
+        )}
+        {mode === "all" &&
+          // Effects + music: bars bouncing like a level meter.
+          [4, 9, 6].map((h, i) => (
             <rect
               key={i}
               className="sound-bar"
@@ -347,10 +377,7 @@ function SoundToggle() {
               rx={1}
               fill="currentColor"
             />
-          ) : (
-            <circle key={i} cx={2 + i * 4} cy={6} r={1.1} fill="currentColor" />
-          ),
-        )}
+          ))}
       </svg>
     </button>
   );

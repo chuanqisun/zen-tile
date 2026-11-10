@@ -11,8 +11,9 @@ import drop3Url from "./assets/drop-03.mp3";
  * Sound engine. Short effects go through the Web Audio API, so any number can overlap and they start with
  * low latency; the long music track streams through an <audio> element instead of being decoded to memory.
  *
- * Sound defaults to on, and the user's choice is remembered. The first user gesture starts it (browsers
- * block audio before then). Nothing is downloaded while sound is off.
+ * Three modes: "off" (silence), "sfx" (effects only), and "all" (effects + music). Defaults to "all", and the
+ * user's choice is remembered. The first user gesture starts it (browsers block audio before then). Nothing
+ * is downloaded while sound is off, and the music isn't fetched unless it's wanted.
  */
 
 const STORAGE_KEY = "sound";
@@ -31,9 +32,20 @@ export type PlacedKind = keyof typeof PLACED_URLS;
 
 type Listener = () => void;
 
-// On unless the user has turned it off before. Browsers refuse to play audio until a gesture, so
-// nothing starts (or loads) until `unlock` runs on the first interaction.
-let enabled = localStorage.getItem(STORAGE_KEY) !== "off";
+export type SoundMode = "off" | "sfx" | "all";
+export const SOUND_MODES: SoundMode[] = ["off", "sfx", "all"];
+
+const readMode = (): SoundMode => {
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (stored === "off" || stored === "sfx") return stored;
+  return "all"; // the default, and the old "on" value
+};
+
+// Browsers refuse to play audio until a gesture, so nothing starts (or loads) until `unlock` runs on the
+// first interaction.
+let mode: SoundMode = readMode();
+let enabled = mode !== "off"; // effects play
+let musicEnabled = mode === "all";
 const listeners = new Set<Listener>();
 
 let ctx: AudioContext | null = null;
@@ -113,7 +125,7 @@ const lastPlaced: Record<PlacedKind, number> = { fill: -1, drop: -1 };
 let preloaded = false;
 
 export const sound = {
-  isEnabled: () => enabled,
+  getMode: () => mode,
 
   subscribe(listener: Listener) {
     listeners.add(listener);
@@ -121,17 +133,16 @@ export const sound = {
   },
 
   /** Call from a user gesture (the toggle). */
-  setEnabled(on: boolean) {
-    enabled = on;
-    localStorage.setItem(STORAGE_KEY, on ? "on" : "off");
+  setMode(next: SoundMode) {
+    mode = next;
+    enabled = next !== "off";
+    musicEnabled = next === "all";
+    localStorage.setItem(STORAGE_KEY, next);
     listeners.forEach((l) => l());
 
-    if (on) {
-      sound.unlock();
-    } else {
-      stopMusic();
-      stopDrawingNow();
-    }
+    if (!musicEnabled) stopMusic();
+    if (!enabled) stopDrawingNow();
+    sound.unlock();
   },
 
   /**
@@ -142,7 +153,7 @@ export const sound = {
     if (!enabled) return;
     const c = getContext();
     if (c.state !== "running") c.resume();
-    if (music?.paused !== false) startMusic();
+    if (musicEnabled && music?.paused !== false) startMusic();
     if (!preloaded) {
       preloaded = true;
       [...PLACED_URLS.fill, ...PLACED_URLS.drop, drawingUrl].forEach((url) => loadBuffer(url).catch(() => {}));
@@ -186,7 +197,7 @@ export const sound = {
 
   /** Music is the only thing worth pausing when the tab is hidden. */
   setHidden(hidden: boolean) {
-    if (!enabled) return;
+    if (!musicEnabled) return;
     if (hidden) stopMusic();
     else startMusic();
   },

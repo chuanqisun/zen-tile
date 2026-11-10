@@ -104,8 +104,39 @@ svg {
   }
 }
 
+/* Sound effects only: a sine line that flows sideways and gently swells. */
+.sound-wave {
+  animation: sound-wave-flow 0.9s linear infinite;
+}
+
+@keyframes sound-wave-flow {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(6px); /* one wavelength, so the loop is seamless */
+  }
+}
+
+.sound-wave-swell {
+  transform-box: view-box;
+  transform-origin: center;
+  animation: sound-wave-swell 1.3s ease-in-out infinite alternate;
+}
+
+@keyframes sound-wave-swell {
+  from {
+    transform: scaleY(0.4);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .sound-bar {
+  .sound-bar,
+  .sound-wave,
+  .sound-wave-swell {
     animation: none;
   }
 }
