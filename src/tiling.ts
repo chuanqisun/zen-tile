@@ -27,6 +27,8 @@ export type PlacedShape = {
   shared?: boolean[];
   /** How the tile was placed, which decides the sound it makes. */
   placedBy?: "drag" | "sketch";
+  /** Sketched tiles: where the pen lifted (world coords). Their fill is scribbled in from there. */
+  revealFrom?: { x: number; y: number };
 };
 
 type Edge = {

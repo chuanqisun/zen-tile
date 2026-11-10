@@ -192,7 +192,10 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
 
               const liveState = { ...state, sketchPoints: [...pts] };
               const matched = pathLength(pts) > 20 ? recognizeSketchPlacement(state, pts) : null;
-              const dropState = matched ? finalizePlacedState(applyPlacedShape(state, { ...matched, placedBy: "sketch" })) : { ...state, sketchPoints: [] };
+              const penUp = pts[pts.length - 1];
+              const dropState = matched
+                ? finalizePlacedState(applyPlacedShape(state, { ...matched, placedBy: "sketch", revealFrom: { x: penUp.x, y: penUp.y } }))
+                : { ...state, sketchPoints: [] };
 
               return {
                 preview: () => renderStateReadOnly(ctx, liveState),
@@ -224,7 +227,14 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
             dragologyZIndex={draggedId === shape.id ? "/1" : -i}
             style={{ pointerEvents: "none" }}
           >
-            <TileBody tileId={shape.id} type={shape.type} shared={shape.shared} angle={shape.angle} animate={draggedId === shape.id} />
+            <TileBody
+              tileId={shape.id}
+              type={shape.type}
+              shared={shape.shared}
+              angle={shape.angle}
+              animate={draggedId === shape.id}
+              revealDir={shape.revealFrom && { x: shape.x - shape.revealFrom.x, y: shape.y - shape.revealFrom.y }}
+            />
           </g>
         );
       })}
