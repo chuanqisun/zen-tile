@@ -25,6 +25,8 @@ export type PlacedShape = {
   angle: number;
   /** Per edge (vertex i -> i + 1): lies on an older tile at placement time. */
   shared?: boolean[];
+  /** How the tile was placed, which decides the sound it makes. */
+  placedBy?: "drag" | "sketch";
 };
 
 type Edge = {

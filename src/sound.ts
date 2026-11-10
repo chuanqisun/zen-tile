@@ -3,13 +3,16 @@ import drawingUrl from "./assets/drawing.mp3";
 import fill1Url from "./assets/fill-01.mp3";
 import fill2Url from "./assets/fill-02.mp3";
 import fill3Url from "./assets/fill-03.mp3";
+import drop1Url from "./assets/drop-01.mp3";
+import drop2Url from "./assets/drop-02.mp3";
+import drop3Url from "./assets/drop-03.mp3";
 
 /**
  * Sound engine. Short effects go through the Web Audio API, so any number can overlap and they start with
  * low latency; the long music track streams through an <audio> element instead of being decoded to memory.
  *
- * Everything is off until the user turns sound on, and that preference is remembered. Nothing is downloaded
- * while sound is off.
+ * Sound defaults to on, and the user's choice is remembered. The first user gesture starts it (browsers
+ * block audio before then). Nothing is downloaded while sound is off.
  */
 
 const STORAGE_KEY = "sound";
@@ -19,11 +22,18 @@ const DRAWING_VOLUME = 0.5;
 const DRAWING_IDLE_MS = 140; // the scratching stops when the pen stops moving
 const FADE_S = 0.12;
 const FILL_FADE_S = 0.1;
-const FILL_URLS = [fill1Url, fill2Url, fill3Url];
+// A placed tile sounds one way when sketched (fill) and another when dragged in (drop).
+const PLACED_URLS = {
+  fill: [fill1Url, fill2Url, fill3Url],
+  drop: [drop1Url, drop2Url, drop3Url],
+};
+export type PlacedKind = keyof typeof PLACED_URLS;
 
 type Listener = () => void;
 
-let enabled = localStorage.getItem(STORAGE_KEY) === "on";
+// On unless the user has turned it off before. Browsers refuse to play audio until a gesture, so
+// nothing starts (or loads) until `unlock` runs on the first interaction.
+let enabled = localStorage.getItem(STORAGE_KEY) !== "off";
 const listeners = new Set<Listener>();
 
 let ctx: AudioContext | null = null;
@@ -99,7 +109,8 @@ const startDrawingNow = async () => {
 
 // ---- public API ------------------------------------------------------------------------------------------
 
-let lastFill = -1;
+const lastPlaced: Record<PlacedKind, number> = { fill: -1, drop: -1 };
+let preloaded = false;
 
 export const sound = {
   isEnabled: () => enabled,
@@ -116,21 +127,26 @@ export const sound = {
     listeners.forEach((l) => l());
 
     if (on) {
-      getContext().resume();
-      startMusic();
-      FILL_URLS.forEach((url) => loadBuffer(url).catch(() => {}));
-      loadBuffer(drawingUrl).catch(() => {});
+      sound.unlock();
     } else {
       stopMusic();
       stopDrawingNow();
     }
   },
 
-  /** Retry anything the browser blocked before the first gesture (e.g. sound was left on last visit). */
+  /**
+   * Call on user gestures. The first one starts the music and preloads the effects (browsers refuse before
+   * then); later calls retry only if something was blocked or paused.
+   */
   unlock() {
     if (!enabled) return;
-    getContext().resume();
+    const c = getContext();
+    if (c.state !== "running") c.resume();
     if (music?.paused !== false) startMusic();
+    if (!preloaded) {
+      preloaded = true;
+      [...PLACED_URLS.fill, ...PLACED_URLS.drop, drawingUrl].forEach((url) => loadBuffer(url).catch(() => {}));
+    }
   },
 
   /** Call on every pen movement while drawing; the loop fades out shortly after movement stops. */
@@ -143,14 +159,15 @@ export const sound = {
 
   stopDrawing: stopDrawingNow,
 
-  /** A random fill sound, never the same one twice in a row. Overlaps with anything already playing. */
-  async playFill() {
+  /** A random sound of the given kind, never the same one twice in a row. Overlaps with anything already playing. */
+  async playPlaced(kind: PlacedKind) {
     if (!enabled) return;
-    let i = Math.floor(Math.random() * FILL_URLS.length);
-    if (i === lastFill) i = (i + 1 + Math.floor(Math.random() * (FILL_URLS.length - 1))) % FILL_URLS.length;
-    lastFill = i;
+    const urls = PLACED_URLS[kind];
+    let i = Math.floor(Math.random() * urls.length);
+    if (i === lastPlaced[kind]) i = (i + 1 + Math.floor(Math.random() * (urls.length - 1))) % urls.length;
+    lastPlaced[kind] = i;
 
-    const buffer = await loadBuffer(FILL_URLS[i]).catch(() => null);
+    const buffer = await loadBuffer(urls[i]).catch(() => null);
     if (!buffer || !enabled) return;
 
     const c = getContext();

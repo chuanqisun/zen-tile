@@ -61,7 +61,7 @@ class TrackPointer<T extends object> extends Modifier<T> {
 }
 const trackPointer = modifier(TrackPointer);
 // Bottom strip, in the thumb zone. Tiles wrap to two rows on narrow screens.
-const PALETTE_HEIGHT = 132;
+const PALETTE_HEIGHT = 100;
 
 type Viewport = {
   width: number;
@@ -170,6 +170,7 @@ const recognizeSketchPlacement = (state: State, points: Vec2[]) => {
 const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
   const { width: viewW, height: viewH } = state.viewport;
   const previewPlacement = recognizeSketchPlacement(state, state.sketchPoints);
+  const center = getCanvasCenter(state.viewport);
 
   return (
     <g>
@@ -191,7 +192,7 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
 
               const liveState = { ...state, sketchPoints: [...pts] };
               const matched = pathLength(pts) > 20 ? recognizeSketchPlacement(state, pts) : null;
-              const dropState = matched ? finalizePlacedState(applyPlacedShape(state, matched)) : { ...state, sketchPoints: [] };
+              const dropState = matched ? finalizePlacedState(applyPlacedShape(state, { ...matched, placedBy: "sketch" })) : { ...state, sketchPoints: [] };
 
               return {
                 preview: () => renderStateReadOnly(ctx, liveState),
@@ -205,11 +206,20 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
 
       <line x1={0} y1={viewH - PALETTE_HEIGHT} x2={viewW} y2={viewH - PALETTE_HEIGHT} stroke={INK} />
 
+      {state.shapes.length === 0 && draggedId === null && (
+        <g id="start-hint" className="start-hint" transform={translate(center.x, center.y)} style={{ pointerEvents: "none" }}>
+          <polygon points={getPolygonPoints("reg-3")} fill="none" stroke={INK} strokeDasharray="4 4" vectorEffect="non-scaling-stroke" />
+          <text y={SHAPE_DEF_MAP["reg-3"].vertices[1].y + 32} textAnchor="middle" fill={INK} fontSize={14} letterSpacing={1}>
+            Sketch to start
+          </text>
+        </g>
+      )}
+
       {state.shapes.map((shape, i) => {
         return (
           <g
             id={shape.id}
-            transform={translate(shape.x, shape.y)}
+            transform={translate(shape.x, shape.y) + rotateDeg(0) + scale(1)}
             // Older tiles sit above newer ones, so existing edges win over a new tile's straight shared edge.
             dragologyZIndex={draggedId === shape.id ? "/1" : -i}
             style={{ pointerEvents: "none" }}
@@ -269,7 +279,9 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
                   // Drag-and-drop places the full tile: drop the shared-edge marks so every edge is drawn.
                   // (Sketch placements keep them, since the user omits edges they consider implicit.)
                   const targetStates = nearby.length
-                    ? nearby.map(({ placed }) => applyPlacedShape(state, { ...placed, angle: shortestAngle(placed.angle), shared: undefined }))
+                    ? nearby.map(({ placed }) =>
+                        applyPlacedShape(state, { ...placed, angle: shortestAngle(placed.angle), shared: undefined, placedBy: "drag" }),
+                      )
                     : [state];
 
                   const overlay = (
@@ -314,9 +326,19 @@ function SoundToggle() {
       <svg width={12} height={12} viewBox="0 0 12 12" aria-hidden>
         {bars.map((h, i) =>
           on ? (
-            <rect x={1 + i * 4} y={6 - h / 2} width={2} height={h} rx={1} fill="currentColor" />
+            <rect
+              key={i}
+              className="sound-bar"
+              style={{ animationDelay: `${-i * 0.37}s`, animationDuration: `${0.9 + i * 0.25}s` }}
+              x={1 + i * 4}
+              y={6 - h / 2}
+              width={2}
+              height={h}
+              rx={1}
+              fill="currentColor"
+            />
           ) : (
-            <circle cx={2 + i * 4} cy={6} r={1.1} fill="currentColor" />
+            <circle key={i} cx={2 + i * 4} cy={6} r={1.1} fill="currentColor" />
           ),
         )}
       </svg>
@@ -366,19 +388,24 @@ export function App() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // Sound: retry anything the browser blocked before the first gesture, stop the drawing loop when the pen lifts,
+  // Sound: the first gesture starts it (browsers block audio before then), stop the drawing loop when the pen lifts,
   // and pause the music while the tab is hidden.
   useEffect(() => {
     const unlock = () => sound.unlock();
     const stopDrawing = () => sound.stopDrawing();
     const onVisibility = () => sound.setHidden(document.hidden);
 
+    // Touch only counts as a gesture on release, so listen to both; keys count too.
     window.addEventListener("pointerdown", unlock);
+    window.addEventListener("pointerup", unlock);
+    window.addEventListener("keydown", unlock);
     window.addEventListener("pointerup", stopDrawing);
     window.addEventListener("pointercancel", stopDrawing);
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("pointerup", unlock);
+      window.removeEventListener("keydown", unlock);
       window.removeEventListener("pointerup", stopDrawing);
       window.removeEventListener("pointercancel", stopDrawing);
       document.removeEventListener("visibilitychange", onVisibility);
@@ -387,7 +414,7 @@ export function App() {
 
   // Both drag-and-drop and sketching end here, so a new tile is where its sound plays.
   const handleDrop = (next: State) => {
-    if (next.shapes.length > state.shapes.length) sound.playFill();
+    if (next.shapes.length > state.shapes.length) sound.playPlaced(next.shapes[next.shapes.length - 1].placedBy === "sketch" ? "fill" : "drop");
     setState(next);
   };
 

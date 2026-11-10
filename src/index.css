@@ -66,3 +66,46 @@ svg {
   place-items: center;
   background: var(--paper);
 }
+
+/* Immersive: no focus rings (the toggles still brighten on focus). */
+:focus,
+:focus-visible {
+  outline: none;
+}
+
+/* Empty canvas: the hint (outline and label together, so they stay in sync) fades in and out where the first tile goes. */
+.start-hint {
+  animation: start-hint-fade 2.2s ease-in-out infinite;
+}
+
+@keyframes start-hint-fade {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* Sound on: the toggle's bars bounce like a level meter. */
+.sound-bar {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sound-bar-bounce ease-in-out infinite alternate;
+}
+
+@keyframes sound-bar-bounce {
+  from {
+    transform: scaleY(0.45);
+  }
+  to {
+    transform: scaleY(1.35);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sound-bar {
+    animation: none;
+  }
+}
