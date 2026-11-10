@@ -1,3 +1,3 @@
-# SketchTile
+# Zen Tile
 
-Tile a surface by sketching
+Meditation game where you tile a surface by sketching.
