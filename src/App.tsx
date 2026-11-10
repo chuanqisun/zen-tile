@@ -8,9 +8,11 @@ import {
   getBoundaryEdges,
   getPolygonPoints,
   getValidPlacements,
+  getWorldEdges,
   getWorldVertices,
   type PlacedShape,
   SHAPE_DEF_MAP,
+  sameEdge,
   type ShapeId,
 } from "./tiling";
 
@@ -69,7 +71,11 @@ const buildCanvasTemplates = (state: State) => {
   const boundaryEdges = getBoundaryEdges(state.shapes);
   const allPlacements = state.availableTypes.flatMap((type) => getPlacementsForType(state, type, boundaryEdges));
 
-  return allPlacements.flatMap((placed) => makePolygonStrokeTemplates(getWorldVertices(placed), placed.type, placed));
+  return allPlacements.flatMap((placed) => {
+    // Edges coinciding with the current boundary already exist, so the user may skip drawing them.
+    const shared = getWorldEdges(placed).map((edge) => boundaryEdges.some((b) => sameEdge(edge, b)));
+    return makePolygonStrokeTemplates(getWorldVertices(placed), placed.type, placed, shared);
+  });
 };
 
 // Templates depend only on these fields, not on sketchPoints, so one entry is reused for every
