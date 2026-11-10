@@ -1,10 +1,218 @@
-import { type Draggable, DraggableRenderer, rotateDeg, scale, translate, Vec2 } from "dragology";
+import { type Draggable, DraggableRenderer, renderStateReadOnly, rotateDeg, scale, translate, Vec2 } from "dragology";
 import { useState } from "react";
 import "./App.css";
 
 const UNIT = 60;
 const EPS = 0.5;
-const ANGLE_EPS = 1;
+const SNAP_GAP = 60;
+
+// --- $1 Unistroke Recognizer (from 02-gesture-recognition.html) ---
+const NUM_POINTS = 64;
+const SQUARE_SIZE = 250.0;
+const HALF_DIAGONAL = 0.5 * Math.sqrt(SQUARE_SIZE * SQUARE_SIZE + SQUARE_SIZE * SQUARE_SIZE);
+const ANGLE_RANGE = 45.0 * (Math.PI / 180.0);
+const ANGLE_PRECISION = 2.0 * (Math.PI / 180.0);
+const PHI = 0.5 * (-1.0 + Math.sqrt(5.0));
+
+function pathLength(points: Vec2[]): number {
+  let d = 0.0;
+  for (let i = 1; i < points.length; i++) {
+    d += points[i - 1].dist(points[i]);
+  }
+  return d;
+}
+
+function centroid(points: Vec2[]): Vec2 {
+  let x = 0.0;
+  let y = 0.0;
+  for (let i = 0; i < points.length; i++) {
+    x += points[i].x;
+    y += points[i].y;
+  }
+  return Vec2(x / points.length, y / points.length);
+}
+
+function boundingBox(points: Vec2[]) {
+  let minX = +Infinity;
+  let maxX = -Infinity;
+  let minY = +Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < points.length; i++) {
+    if (points[i].x < minX) minX = points[i].x;
+    if (points[i].y < minY) minY = points[i].y;
+    if (points[i].x > maxX) maxX = points[i].x;
+    if (points[i].y > maxY) maxY = points[i].y;
+  }
+  return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+}
+
+function resample(points: Vec2[], n: number): Vec2[] {
+  const pts = points.map((p) => Vec2(p.x, p.y));
+  const I = pathLength(pts) / (n - 1);
+  if (I <= 1e-6) {
+    return Array.from({ length: n }, () => Vec2(pts[0].x, pts[0].y));
+  }
+  let D = 0.0;
+  const newPoints: Vec2[] = [Vec2(pts[0].x, pts[0].y)];
+
+  for (let i = 1; i < pts.length; i++) {
+    const d = pts[i - 1].dist(pts[i]);
+    if (D + d >= I && d > 0) {
+      const qx = pts[i - 1].x + ((I - D) / d) * (pts[i].x - pts[i - 1].x);
+      const qy = pts[i - 1].y + ((I - D) / d) * (pts[i].y - pts[i - 1].y);
+      const q = Vec2(qx, qy);
+      newPoints.push(q);
+      pts.splice(i, 0, q);
+      D = 0.0;
+    } else {
+      D += d;
+    }
+  }
+  while (newPoints.length < n) {
+    newPoints.push(Vec2(pts[pts.length - 1].x, pts[pts.length - 1].y));
+  }
+  return newPoints.slice(0, n);
+}
+
+function rotateBy(points: Vec2[], radians: number): Vec2[] {
+  const c = centroid(points);
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return points.map((p) => Vec2((p.x - c.x) * cos - (p.y - c.y) * sin + c.x, (p.x - c.x) * sin + (p.y - c.y) * cos + c.y));
+}
+
+function normalizeAngleRad(rad: number): number {
+  let d = (rad + Math.PI) % (2 * Math.PI);
+  if (d < 0) d += 2 * Math.PI;
+  return d - Math.PI;
+}
+
+function indicativeAngle(points: Vec2[]): number {
+  const c = centroid(points);
+  return Math.atan2(points[0].y - c.y, points[0].x - c.x);
+}
+
+function rotateToZero(points: Vec2[]): { points: Vec2[]; angleRad: number } {
+  const theta = indicativeAngle(points);
+  return { points: rotateBy(points, -theta), angleRad: theta };
+}
+
+function scaleToSquare(points: Vec2[], size: number): Vec2[] {
+  const B = boundingBox(points);
+  const w = B.width === 0 ? 1 : B.width;
+  const h = B.height === 0 ? 1 : B.height;
+  return points.map((p) => Vec2(p.x * (size / w), p.y * (size / h)));
+}
+
+function translateToOrigin(points: Vec2[]): Vec2[] {
+  const c = centroid(points);
+  return points.map((p) => Vec2(p.x - c.x, p.y - c.y));
+}
+
+function pathDistance(pts1: Vec2[], pts2: Vec2[]): number {
+  let d = 0.0;
+  for (let i = 0; i < pts1.length; i++) {
+    d += pts1[i].dist(pts2[i]);
+  }
+  return d / pts1.length;
+}
+
+function distanceAtBestAngle(points: Vec2[], T: Vec2[], a: number, b: number, threshold: number): { distance: number; angleRad: number } {
+  let x1 = PHI * a + (1.0 - PHI) * b;
+  let f1 = pathDistance(rotateBy(points, x1), T);
+
+  let x2 = (1.0 - PHI) * a + PHI * b;
+  let f2 = pathDistance(rotateBy(points, x2), T);
+
+  while (Math.abs(b - a) > threshold) {
+    if (f1 < f2) {
+      b = x2;
+      x2 = x1;
+      f2 = f1;
+      x1 = PHI * a + (1.0 - PHI) * b;
+      f1 = pathDistance(rotateBy(points, x1), T);
+    } else {
+      a = x1;
+      x1 = x2;
+      f1 = f2;
+      x2 = (1.0 - PHI) * a + PHI * b;
+      f2 = pathDistance(rotateBy(points, x2), T);
+    }
+  }
+  return f1 < f2 ? { distance: f1, angleRad: x1 } : { distance: f2, angleRad: x2 };
+}
+
+function normalizeDollar1(rawPoints: Vec2[]): { points: Vec2[]; indicativeAngleRad: number } {
+  const s1 = resample(rawPoints, NUM_POINTS);
+  const s2 = rotateToZero(s1);
+  const s3 = scaleToSquare(s2.points, SQUARE_SIZE);
+  return {
+    points: translateToOrigin(s3),
+    indicativeAngleRad: s2.angleRad,
+  };
+}
+
+type GestureTemplate<T> = {
+  name: string;
+  points: Vec2[];
+  indicativeAngleRad: number;
+  payload: T;
+};
+
+function makePolygonStrokeTemplates<T>(vertices: Vec2[], name: string, payload: T): GestureTemplate<T>[] {
+  const n = vertices.length;
+  const templates: GestureTemplate<T>[] = [];
+  // Build unistroke templates starting from each vertex in both winding directions (CW & CCW)
+  // so sketching a polygon from any corner or direction is accurately matched by $1.
+  for (let startIdx = 0; startIdx < n; startIdx++) {
+    for (const dir of [1, -1]) {
+      const raw: Vec2[] = [];
+      const stepsPerEdge = 16;
+      for (let edge = 0; edge < n; edge++) {
+        const v0 = vertices[(startIdx + edge * dir + n * 10) % n];
+        const v1 = vertices[(startIdx + (edge + 1) * dir + n * 10) % n];
+        for (let s = 0; s < stepsPerEdge; s++) {
+          raw.push(v0.lerp(v1, s / stepsPerEdge));
+        }
+      }
+      raw.push(vertices[startIdx]);
+      const norm = normalizeDollar1(raw);
+      templates.push({
+        name,
+        points: norm.points,
+        indicativeAngleRad: norm.indicativeAngleRad,
+        payload,
+      });
+    }
+  }
+  return templates;
+}
+
+function recognizeDollar1<T>(rawPoints: Vec2[], templates: GestureTemplate<T>[]): { template: GestureTemplate<T>; score: number } | null {
+  if (rawPoints.length < 4 || templates.length === 0) return null;
+  const candidate = normalizeDollar1(rawPoints);
+  let bestTemplate = templates[0];
+  let bestEffectiveDist = +Infinity;
+
+  for (const T of templates) {
+    const { distance: d, angleRad: gssAngleRad } = distanceAtBestAngle(candidate.points, T.points, -ANGLE_RANGE, +ANGLE_RANGE, ANGLE_PRECISION);
+    // Account for the world-space rotation difference between the sketch and the candidate tile placement:
+    // Both candidate and template were rotated by -indicativeAngleRad in Step 2, and candidate was further rotated by gssAngleRad in Step 4.
+    // So the net rotation applied to align the sketch with the tile in world space is:
+    // (candidate.indicativeAngleRad - gssAngleRad) - T.indicativeAngleRad.
+    const worldAngleDiff = Math.abs(normalizeAngleRad(candidate.indicativeAngleRad - gssAngleRad - T.indicativeAngleRad));
+    // Penalize templates that require rotating the sketch away from the actual tile orientation on canvas
+    const rotationPenalty = (worldAngleDiff / Math.PI) * HALF_DIAGONAL * 0.5;
+    const effectiveDist = d + rotationPenalty;
+
+    if (effectiveDist < bestEffectiveDist) {
+      bestEffectiveDist = effectiveDist;
+      bestTemplate = T;
+    }
+  }
+  const score = Math.max(0, 1.0 - bestEffectiveDist / HALF_DIAGONAL);
+  return { template: bestTemplate, score };
+}
 
 // Minimalist set of unit-side-length (equilateral) tilable shapes:
 // 1. Regular polygons closing crystallographic & quasiperiodic symmetry wedges:
@@ -22,19 +230,7 @@ const ANGLE_EPS = 1;
 //    - rhombus-60 (60°/120°)  : Rhombille / 60° lozenge (dual of 3.6.3.6)
 //    - rhombus-72 (72°/108°)  : Thick Penrose rhombus (10-fold bridge, e.g., 360° - 2×144° = 72°)
 
-type ShapeId =
-  | "reg-3"
-  | "reg-4"
-  | "reg-5"
-  | "reg-6"
-  | "reg-8"
-  | "reg-10"
-  | "reg-12"
-  | "rhombus-30"
-  | "rhombus-36"
-  | "rhombus-45"
-  | "rhombus-60"
-  | "rhombus-72";
+type ShapeId = "reg-3" | "reg-4" | "reg-5" | "reg-6" | "reg-8" | "reg-10" | "reg-12" | "rhombus-30" | "rhombus-36" | "rhombus-45" | "rhombus-60" | "rhombus-72";
 
 type ShapeDef = {
   id: ShapeId;
@@ -99,6 +295,7 @@ type State = {
   shapes: PlacedShape[];
   availableTypes: ShapeId[];
   nextId: Record<string, number>;
+  sketchPoints: Vec2[];
 };
 
 function getLocalVertices(type: ShapeId): Vec2[] {
@@ -180,12 +377,7 @@ function samePolygonPlacement(vertsA: Vec2[], vertsB: Vec2[]): boolean {
 }
 
 // Compute all valid candidate placements for a shape of `type` adjacent to `existingShapes`
-function getValidPlacements(
-  existingShapes: PlacedShape[],
-  type: ShapeId,
-  id: string,
-  boundaryEdges = getBoundaryEdges(existingShapes),
-): PlacedShape[] {
+function getValidPlacements(existingShapes: PlacedShape[], type: ShapeId, id: string, boundaryEdges = getBoundaryEdges(existingShapes)): PlacedShape[] {
   const def = SHAPE_DEF_MAP[type];
   const existingVerts = existingShapes.map(getWorldVertices);
   const candidates: { shape: PlacedShape; verts: Vec2[] }[] = [];
@@ -232,6 +424,69 @@ function computeUpdatedPalette(shapes: PlacedShape[], currentAvailable: ShapeId[
   return Array.from(discovered).sort((a, b) => SHAPE_DEF_MAP[a].order - SHAPE_DEF_MAP[b].order);
 }
 
+function finalizePlacedState(previewState: State): State {
+  const nextAvailable = computeUpdatedPalette(previewState.shapes, previewState.availableTypes);
+  const updatedNextId = { ...previewState.nextId };
+  for (const s of nextAvailable) {
+    if (!(s in updatedNextId)) {
+      updatedNextId[s] = 1;
+    }
+  }
+  return {
+    ...previewState,
+    availableTypes: nextAvailable,
+    nextId: updatedNextId,
+    sketchPoints: [],
+  };
+}
+
+// Compute all valid candidate placements across available shape types for the current canvas state.
+function getAllAvailablePlacements(state: State): PlacedShape[] {
+  const boundaryEdges = getBoundaryEdges(state.shapes);
+  const allValid: PlacedShape[] = [];
+
+  for (const type of state.availableTypes) {
+    const count = state.nextId[type] ?? 1;
+    const id = `shape-${type}-${count}`;
+    const placements =
+      state.shapes.length === 0 ? [{ id, type, x: CANVAS_CENTER.x, y: CANVAS_CENTER.y, angle: 0 }] : getValidPlacements(state.shapes, type, id, boundaryEdges);
+    allValid.push(...placements);
+  }
+  return allValid;
+}
+
+// Dynamically filter to the placements that are possible at the sketched location
+// (reusing the same SNAP_GAP proximity check as drag-and-drop), then build $1 templates for them.
+function getDynamicTemplatesForLocation(state: State, location: Vec2): { templates: GestureTemplate<PlacedShape>[]; nearbyPlacements: PlacedShape[] } {
+  const allPlacements = getAllAvailablePlacements(state);
+  if (allPlacements.length === 0) return { templates: [], nearbyPlacements: [] };
+
+  let nearbyPlacements = allPlacements.filter((p) => Vec2(p.x, p.y).dist(location) <= SNAP_GAP);
+
+  // If the canvas is empty, allow sketching anywhere on the canvas to place the first shape at CANVAS_CENTER.
+  if (state.shapes.length === 0) {
+    nearbyPlacements = allPlacements;
+  } else if (nearbyPlacements.length === 0) {
+    // If no placement is strictly within SNAP_GAP, select the closest valid location(s) and any placements sharing that spot
+    let minDist = +Infinity;
+    for (const p of allPlacements) {
+      const d = Vec2(p.x, p.y).dist(location);
+      if (d < minDist) minDist = d;
+    }
+    if (minDist <= SNAP_GAP * 2.5) {
+      nearbyPlacements = allPlacements.filter((p) => Vec2(p.x, p.y).dist(location) <= minDist + UNIT * 0.75);
+    }
+  }
+
+  const templates: GestureTemplate<PlacedShape>[] = [];
+  for (const placed of nearbyPlacements) {
+    const worldVerts = getWorldVertices(placed);
+    templates.push(...makePolygonStrokeTemplates(worldVerts, placed.type, placed));
+  }
+
+  return { templates, nearbyPlacements };
+}
+
 const CANVAS_CENTER = { x: 450, y: 300 };
 
 function getPaletteItemTransform(index: number, total: number, type: ShapeId): { x: number; y: number; scaleFactor: number } {
@@ -247,16 +502,113 @@ function getPaletteItemTransform(index: number, total: number, type: ShapeId): {
 }
 
 const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
+  const sketchCenter = state.sketchPoints.length >= 2 ? centroid(state.sketchPoints) : null;
+  const dynamicMatch =
+    state.sketchPoints.length >= 4 && sketchCenter
+      ? (() => {
+          const { templates, nearbyPlacements } = getDynamicTemplatesForLocation(state, sketchCenter);
+          const recognized = recognizeDollar1(state.sketchPoints, templates);
+          return { recognized, nearbyPlacements };
+        })()
+      : null;
+
   return (
     <g>
+      {/* Background surface for sketching on the canvas */}
+      <rect
+        id="sketch-surface"
+        transform={translate(160, 0)}
+        width={640}
+        height={600}
+        fill="transparent"
+        style={{ cursor: "crosshair" }}
+        dragologyOnDrag={() => {
+          const pts: Vec2[] = [];
+          return d
+            .custom((ctx) => (frame) => {
+              if (pts.length === 0 || pts[pts.length - 1].dist(frame.pointer) > 2) {
+                pts.push(frame.pointer);
+              }
+
+              const liveState: State = {
+                ...state,
+                sketchPoints: [...pts],
+              };
+
+              let dropState: State = { ...state, sketchPoints: [] };
+              if (pts.length >= 4 && pathLength(pts) > 20) {
+                const center = centroid(pts);
+                const { templates } = getDynamicTemplatesForLocation(state, center);
+                const match = recognizeDollar1(pts, templates);
+                if (match) {
+                  const placed = match.template.payload;
+                  const count = state.nextId[placed.type] ?? 1;
+                  dropState = finalizePlacedState({
+                    shapes: [...state.shapes, placed],
+                    availableTypes: state.availableTypes,
+                    nextId: { ...state.nextId, [placed.type]: count + 1 },
+                    sketchPoints: [],
+                  });
+                }
+              }
+
+              return {
+                preview: () => renderStateReadOnly(ctx, liveState),
+                dropState,
+                gap: 0,
+              };
+            })
+            .withDropTransition(false);
+        }}
+      />
+
       <line x1={160} y1={0} x2={160} y2={600} stroke="black" />
 
       {/* Placed Shapes */}
       {state.shapes.map((shape) => (
-        <g id={shape.id} transform={translate(shape.x, shape.y) + rotateDeg(shape.angle)} dragologyZIndex={draggedId === shape.id ? "/1" : 0}>
+        <g
+          id={shape.id}
+          transform={translate(shape.x, shape.y) + rotateDeg(shape.angle)}
+          dragologyZIndex={draggedId === shape.id ? "/1" : 0}
+          style={{ pointerEvents: "none" }}
+        >
           <polygon points={getPolygonPoints(shape.type)} fill="white" stroke="black" vectorEffect="non-scaling-stroke" />
         </g>
       ))}
+
+      {/* Live preview of candidate ghost placement while sketching */}
+      {dynamicMatch?.recognized && (
+        <g
+          id="sketch-ghost-best"
+          transform={
+            translate(dynamicMatch.recognized.template.payload.x, dynamicMatch.recognized.template.payload.y) +
+            rotateDeg(dynamicMatch.recognized.template.payload.angle)
+          }
+          style={{ pointerEvents: "none" }}
+        >
+          <polygon
+            points={getPolygonPoints(dynamicMatch.recognized.template.payload.type)}
+            fill="none"
+            stroke="black"
+            strokeDasharray="4 4"
+            vectorEffect="non-scaling-stroke"
+          />
+        </g>
+      )}
+
+      {/* User's active sketch stroke */}
+      {state.sketchPoints.length >= 2 && (
+        <polyline
+          id="active-sketch-stroke"
+          points={state.sketchPoints.map((p) => `${p.x},${p.y}`).join(" ")}
+          fill="none"
+          stroke="#d00000"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ pointerEvents: "none" }}
+        />
+      )}
 
       {/* Palette Items */}
       {state.availableTypes.map((type, idx) => {
@@ -278,6 +630,7 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
                 shapes: [...state.shapes, placed],
                 availableTypes: state.availableTypes,
                 nextId: { ...state.nextId, [type]: count + 1 },
+                sketchPoints: [],
               }));
 
               const overlay = (
@@ -290,25 +643,7 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
                 </g>
               );
 
-              return d
-                .closest(targetStates)
-                .whenFar(state, { gap: 60 })
-                .withFloating()
-                .withOverlay(overlay)
-                .onDrop((previewState) => {
-                  const nextAvailable = computeUpdatedPalette(previewState.shapes, previewState.availableTypes);
-                  const updatedNextId = { ...previewState.nextId };
-                  for (const s of nextAvailable) {
-                    if (!(s in updatedNextId)) {
-                      updatedNextId[s] = 1;
-                    }
-                  }
-                  return {
-                    ...previewState,
-                    availableTypes: nextAvailable,
-                    nextId: updatedNextId,
-                  };
-                });
+              return d.closest(targetStates).whenFar(state, { gap: SNAP_GAP }).withFloating().withOverlay(overlay).onDrop(finalizePlacedState);
             }}
           >
             <polygon points={getPolygonPoints(type)} fill="white" stroke="black" vectorEffect="non-scaling-stroke" />
@@ -323,6 +658,7 @@ const initialState: State = {
   shapes: [],
   availableTypes: ["reg-3", "reg-4"],
   nextId: { "reg-3": 1, "reg-4": 1 },
+  sketchPoints: [],
 };
 
 export function App() {
