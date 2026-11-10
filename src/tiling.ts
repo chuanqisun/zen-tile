@@ -154,9 +154,14 @@ export const getValidPlacements = (existingShapes: PlacedShape[], type: ShapeId,
   return candidates.map((c) => c.shape);
 };
 
+/**
+ * Shapes unlock as the tiling grows. The triangle is there from the start and the square arrives with the
+ * first triangle; any other shape unlocks once it can be placed with two adjacent edges (meeting at one of
+ * its corners) both shared with existing tiles, i.e. it fits snugly into a corner of the tiling.
+ */
 export const computeUpdatedPalette = (shapes: PlacedShape[], currentAvailable: ShapeId[]) => {
   const boundaryEdges = getBoundaryEdges(shapes);
-  const discovered = new Set<ShapeId>(currentAvailable);
+  const discovered = new Set<ShapeId>(["reg-3", ...currentAvailable]);
 
   if (shapes.some((s) => s.type === "reg-3")) {
     discovered.add("reg-4");
@@ -166,12 +171,12 @@ export const computeUpdatedPalette = (shapes: PlacedShape[], currentAvailable: S
     if (discovered.has(id)) continue;
 
     const placements = getValidPlacements(shapes, id, `probe-${id}`, boundaryEdges);
-    const fitsWedge = placements.some((cand) => {
-      const sharedEdges = getWorldEdges(cand).filter((ce) => boundaryEdges.some((be) => sameEdge(ce, be)));
-      return sharedEdges.length >= 2;
+    const fitsCorner = placements.some((cand) => {
+      const shared = getWorldEdges(cand).map((ce) => boundaryEdges.some((be) => sameEdge(ce, be)));
+      return shared.some((s, i) => s && shared[(i + 1) % shared.length]);
     });
 
-    if (fitsWedge) {
+    if (fitsCorner) {
       discovered.add(id);
     }
   }
