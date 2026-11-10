@@ -1,6 +1,7 @@
 import { type Draggable, DraggableRenderer, renderStateReadOnly, rotateDeg, scale, translate, Vec2 } from "dragology";
 import { useEffect, useState } from "react";
 import "./App.css";
+import { getTileFill, TilePatternDefs } from "./patterns";
 import { makePolygonStrokeTemplates, pathLength, recognizeDollar1 } from "./dollar1";
 import {
   computeUpdatedPalette,
@@ -64,11 +65,28 @@ const finalizePlacedState = (state: State) => {
   };
 };
 
-const getCanvasTemplates = (state: State) => {
+const buildCanvasTemplates = (state: State) => {
   const boundaryEdges = getBoundaryEdges(state.shapes);
   const allPlacements = state.availableTypes.flatMap((type) => getPlacementsForType(state, type, boundaryEdges));
 
   return allPlacements.flatMap((placed) => makePolygonStrokeTemplates(getWorldVertices(placed), placed.type, placed));
+};
+
+// Templates depend only on these fields, not on sketchPoints, so one entry is reused for every
+// pointer move and render of a sketch (each frame's `{ ...state, sketchPoints }` keeps these refs).
+let templateCache: {
+  key: [State["shapes"], State["availableTypes"], State["nextId"], State["viewport"]];
+  templates: ReturnType<typeof buildCanvasTemplates>;
+} | null = null;
+
+const getCanvasTemplates = (state: State) => {
+  const key: NonNullable<typeof templateCache>["key"] = [state.shapes, state.availableTypes, state.nextId, state.viewport];
+
+  if (!templateCache || templateCache.key.some((ref, i) => ref !== key[i])) {
+    templateCache = { key, templates: buildCanvasTemplates(state) };
+  }
+
+  return templateCache.templates;
 };
 
 const getPaletteItemTransform = (index: number, total: number, type: ShapeId, viewportHeight: number) => {
@@ -135,7 +153,7 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
           dragologyZIndex={draggedId === shape.id ? "/1" : 0}
           style={{ pointerEvents: "none" }}
         >
-          <polygon points={getPolygonPoints(shape.type)} fill="white" stroke="black" vectorEffect="non-scaling-stroke" />
+          <polygon points={getPolygonPoints(shape.type)} fill={getTileFill(shape.id)} stroke="black" vectorEffect="non-scaling-stroke" />
         </g>
       ))}
 
@@ -189,7 +207,7 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
               return d.closest(targetStates).whenFar(state, { gap: SNAP_GAP }).withFloating().withOverlay(overlay).onDrop(finalizePlacedState);
             }}
           >
-            <polygon points={getPolygonPoints(type)} fill="white" stroke="black" vectorEffect="non-scaling-stroke" />
+            <polygon points={getPolygonPoints(type)} fill={getTileFill(id)} stroke="black" vectorEffect="non-scaling-stroke" />
           </g>
         );
       })}
@@ -228,7 +246,20 @@ export function App() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  return <DraggableRenderer draggable={sculptureDraggable} state={state} onDropState={setState} width={state.viewport.width} height={state.viewport.height} />;
+  return (
+    <>
+      <TilePatternDefs
+        tiles={[
+          ...state.shapes,
+          ...state.availableTypes.map((type) => ({
+            id: `shape-${type}-${state.nextId[type] ?? 1}`,
+            type,
+          })),
+        ]}
+      />
+      <DraggableRenderer draggable={sculptureDraggable} state={state} onDropState={setState} width={state.viewport.width} height={state.viewport.height} />
+    </>
+  );
 }
 
 export default App;
