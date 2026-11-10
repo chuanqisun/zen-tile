@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { mulberry32, SESSION_SEED, hashString } from "./random";
 import type { ShapeId } from "./tiling";
 
 /**
@@ -14,14 +15,6 @@ const SW = 3;
 const ink = "black";
 
 type PatternDef = { w: number; h: number; rotate?: number; body: ReactNode };
-
-// Deterministic PRNG so patterns are stable across renders and reloads.
-const mulberry32 = (seed: number) => () => {
-  seed = (seed + 0x6d2b79f5) | 0;
-  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-};
 
 const grid = (n: number) => Array.from({ length: n }, (_, i) => i);
 
@@ -43,7 +36,13 @@ const triangleDots = (r: Rand): PatternDef => {
   const spacing = range(r, 18, 28);
   const h = spacing * Math.sqrt(3);
   const dot = range(r, 2.5, 6);
-  const dots: [number, number][] = [[0, 0], [spacing, 0], [0, h], [spacing, h], [spacing / 2, h / 2]];
+  const dots: [number, number][] = [
+    [0, 0],
+    [spacing, 0],
+    [0, h],
+    [spacing, h],
+    [spacing / 2, h / 2],
+  ];
   return { w: spacing, h, rotate: pick(r, [0, 0, 30, 90]), body: dots.map(([x, y], k) => <circle key={k} cx={x} cy={y} r={dot} fill={ink} />) };
 };
 
@@ -88,7 +87,12 @@ const hexagonHoneycomb = (r: Rand): PatternDef => {
   const rad = range(r, 9, 15);
   const w = rad * Math.sqrt(3);
   const h = 3 * rad;
-  const outline: [number, number][] = [[0, 0], [w, 0], [0, h], [w, h]];
+  const outline: [number, number][] = [
+    [0, 0],
+    [w, 0],
+    [0, h],
+    [w, h],
+  ];
   const fillCorner = r() < 0.35;
   return {
     w,
@@ -174,7 +178,13 @@ const rhombusDiamonds = (r: Rand): PatternDef => {
   return {
     w: size,
     h: size,
-    body: <g>{radii.map((rad, k) => <polygon key={k} points={diamond(rad)} fill={k % 2 === 0 ? ink : "white"} />)}</g>,
+    body: (
+      <g>
+        {radii.map((rad, k) => (
+          <polygon key={k} points={diamond(rad)} fill={k % 2 === 0 ? ink : "white"} />
+        ))}
+      </g>
+    ),
   };
 };
 
@@ -230,16 +240,6 @@ const PATTERNS: Record<ShapeId, (r: Rand) => PatternDef> = {
   "rhombus-45": rhombusDiamonds,
   "rhombus-60": rhombusTriangles,
   "rhombus-72": rhombusMaze,
-};
-
-// Fresh per page load, so every session gets its own set; mixed with each tile's id so
-// every instance within a session differs too.
-const SESSION_SEED = (Math.random() * 2 ** 32) >>> 0;
-
-const hashString = (str: string) => {
-  let h = 2166136261;
-  for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);
-  return h >>> 0;
 };
 
 /** Each tile instance (by id) has its own pattern. */

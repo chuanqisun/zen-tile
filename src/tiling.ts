@@ -23,6 +23,8 @@ export type PlacedShape = {
   x: number;
   y: number;
   angle: number;
+  /** Per edge (vertex i -> i + 1): lies on an older tile at placement time. */
+  shared?: boolean[];
 };
 
 type Edge = {

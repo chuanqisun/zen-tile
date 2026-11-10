@@ -1,12 +1,14 @@
 import { type Draggable, DraggableRenderer, renderStateReadOnly, rotateDeg, scale, translate, Vec2 } from "dragology";
 import { useEffect, useState } from "react";
 import "./App.css";
+import { getHandDrawnPaths } from "./handdrawn";
 import { getTileFill, TilePatternDefs } from "./patterns";
 import { makePolygonStrokeTemplates, pathLength, recognizeDollar1 } from "./dollar1";
 import {
   computeUpdatedPalette,
   getBoundaryEdges,
   getPolygonPoints,
+  getLocalVertices,
   getValidPlacements,
   getWorldEdges,
   getWorldVertices,
@@ -37,11 +39,16 @@ const getCanvasCenter = ({ width, height }: Viewport) => ({
   y: height / 2,
 });
 
-const getPlacementsForType = (state: State, type: ShapeId, boundaryEdges = getBoundaryEdges(state.shapes)) => {
+const getPlacementsForType = (state: State, type: ShapeId, boundaryEdges = getBoundaryEdges(state.shapes)): PlacedShape[] => {
   const id = `shape-${type}-${state.nextId[type] ?? 1}`;
   const center = getCanvasCenter(state.viewport);
 
-  return state.shapes.length === 0 ? [{ id, type, x: center.x, y: center.y, angle: 0 }] : getValidPlacements(state.shapes, type, id, boundaryEdges);
+  if (state.shapes.length === 0) return [{ id, type, x: center.x, y: center.y, angle: 0 }];
+
+  return getValidPlacements(state.shapes, type, id, boundaryEdges).map((placed) => ({
+    ...placed,
+    shared: getWorldEdges(placed).map((edge) => boundaryEdges.some((b) => sameEdge(edge, b))),
+  }));
 };
 
 const applyPlacedShape = (state: State, placed: PlacedShape) => ({
@@ -71,11 +78,8 @@ const buildCanvasTemplates = (state: State) => {
   const boundaryEdges = getBoundaryEdges(state.shapes);
   const allPlacements = state.availableTypes.flatMap((type) => getPlacementsForType(state, type, boundaryEdges));
 
-  return allPlacements.flatMap((placed) => {
-    // Edges coinciding with the current boundary already exist, so the user may skip drawing them.
-    const shared = getWorldEdges(placed).map((edge) => boundaryEdges.some((b) => sameEdge(edge, b)));
-    return makePolygonStrokeTemplates(getWorldVertices(placed), placed.type, placed, shared);
-  });
+  // Edges coinciding with the current boundary already exist, so the user may skip drawing them.
+  return allPlacements.flatMap((placed) => makePolygonStrokeTemplates(getWorldVertices(placed), placed.type, placed, placed.shared));
 };
 
 // Templates depend only on these fields, not on sketchPoints, so one entry is reused for every
@@ -152,16 +156,21 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
 
       <line x1={PALETTE_WIDTH} y1={0} x2={PALETTE_WIDTH} y2={viewH} stroke="black" />
 
-      {state.shapes.map((shape) => (
-        <g
-          id={shape.id}
-          transform={translate(shape.x, shape.y) + rotateDeg(shape.angle)}
-          dragologyZIndex={draggedId === shape.id ? "/1" : 0}
-          style={{ pointerEvents: "none" }}
-        >
-          <polygon points={getPolygonPoints(shape.type)} fill={getTileFill(shape.id)} stroke="black" vectorEffect="non-scaling-stroke" />
-        </g>
-      ))}
+      {state.shapes.map((shape, i) => {
+        const paths = getHandDrawnPaths(getLocalVertices(shape.type), shape.id, shape.shared);
+        return (
+          <g
+            id={shape.id}
+            transform={translate(shape.x, shape.y) + rotateDeg(shape.angle)}
+            // Older tiles sit above newer ones, so existing edges win over a new tile's straight shared edge.
+            dragologyZIndex={draggedId === shape.id ? "/1" : -i}
+            style={{ pointerEvents: "none" }}
+          >
+            <path d={paths.fill} fill={getTileFill(shape.id)} />
+            <path d={paths.stroke} fill="none" stroke="black" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+          </g>
+        );
+      })}
 
       {previewPlacement && (
         <g
@@ -213,7 +222,15 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
               return d.closest(targetStates).whenFar(state, { gap: SNAP_GAP }).withFloating().withOverlay(overlay).onDrop(finalizePlacedState);
             }}
           >
-            <polygon points={getPolygonPoints(type)} fill={getTileFill(id)} stroke="black" vectorEffect="non-scaling-stroke" />
+            <path d={getHandDrawnPaths(getLocalVertices(type), id).fill} fill={getTileFill(id)} />
+            <path
+              d={getHandDrawnPaths(getLocalVertices(type), id).stroke}
+              fill="none"
+              stroke="black"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              vectorEffect="non-scaling-stroke"
+            />
           </g>
         );
       })}
