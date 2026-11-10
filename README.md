@@ -1,3 +1,3 @@
-# Skepture
+# SketchTile
 
-Make a sculpture by sketching
+Tile a surface by sketching
