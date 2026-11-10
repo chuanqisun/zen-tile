@@ -1,7 +1,7 @@
 import { type Draggable, DraggableRenderer, renderStateReadOnly, rotateDeg, scale, translate, Vec2 } from "dragology";
 import { useEffect, useState } from "react";
 import "./App.css";
-import { centroid, makePolygonStrokeTemplates, pathLength, recognizeDollar1 } from "./dollar1";
+import { makePolygonStrokeTemplates, pathLength, recognizeDollar1 } from "./dollar1";
 import {
   computeUpdatedPalette,
   getBoundaryEdges,
@@ -11,7 +11,6 @@ import {
   type PlacedShape,
   SHAPE_DEF_MAP,
   type ShapeId,
-  UNIT,
 } from "./tiling";
 
 const SNAP_GAP = 60;
@@ -65,24 +64,11 @@ const finalizePlacedState = (state: State) => {
   };
 };
 
-const getDynamicTemplatesForLocation = (state: State, location: Vec2) => {
+const getCanvasTemplates = (state: State) => {
   const boundaryEdges = getBoundaryEdges(state.shapes);
   const allPlacements = state.availableTypes.flatMap((type) => getPlacementsForType(state, type, boundaryEdges));
-  if (allPlacements.length === 0) return [];
 
-  const withinSnap = allPlacements.filter((p) => Vec2(p.x, p.y).dist(location) <= SNAP_GAP);
-
-  const nearbyPlacements =
-    state.shapes.length === 0
-      ? allPlacements
-      : withinSnap.length > 0
-        ? withinSnap
-        : (() => {
-            const minDist = Math.min(...allPlacements.map((p) => Vec2(p.x, p.y).dist(location)));
-            return minDist <= SNAP_GAP * 2.5 ? allPlacements.filter((p) => Vec2(p.x, p.y).dist(location) <= minDist + UNIT * 0.75) : [];
-          })();
-
-  return nearbyPlacements.flatMap((placed) => makePolygonStrokeTemplates(getWorldVertices(placed), placed.type, placed));
+  return allPlacements.flatMap((placed) => makePolygonStrokeTemplates(getWorldVertices(placed), placed.type, placed));
 };
 
 const getPaletteItemTransform = (index: number, total: number, type: ShapeId, viewportHeight: number) => {
@@ -100,8 +86,8 @@ const getPaletteItemTransform = (index: number, total: number, type: ShapeId, vi
 
 const recognizeSketchPlacement = (state: State, points: Vec2[]) => {
   if (points.length < 4) return null;
-  const templates = getDynamicTemplatesForLocation(state, centroid(points));
-  return recognizeDollar1(points, templates)?.template.payload ?? null;
+  const templates = getCanvasTemplates(state);
+  return recognizeDollar1(points, templates, SNAP_GAP)?.template.payload ?? null;
 };
 
 const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
