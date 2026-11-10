@@ -1,4 +1,17 @@
-import { type Draggable, DraggableRenderer, renderStateReadOnly, rotateDeg, scale, translate, Vec2 } from "dragology";
+import {
+  type Draggable,
+  DraggableRenderer,
+  type DragFrame,
+  type DragInitContext,
+  type DragSpecData,
+  Modifier,
+  modifier,
+  renderStateReadOnly,
+  rotateDeg,
+  scale,
+  translate,
+  Vec2,
+} from "dragology";
 import { useEffect, useState } from "react";
 import "./App.css";
 import { getHandDrawnPaths } from "./handdrawn";
@@ -19,6 +32,25 @@ import {
 } from "./tiling";
 
 const SNAP_GAP = 60;
+
+type PointerSink = { current: Vec2 | null };
+
+/** Records the latest pointer for the wrapped spec's callbacks (e.g. `reactTo` getters, which get no frame). */
+class TrackPointer<T extends object> extends Modifier<T> {
+  readonly name = "trackPointer";
+  readonly sink: PointerSink;
+
+  constructor(ctx: DragInitContext<T>, inner: DragSpecData<T>, sink: PointerSink) {
+    super(ctx, inner);
+    this.sink = sink;
+  }
+
+  frame(frame: DragFrame) {
+    this.sink.current = frame.pointer;
+    return this.inner.run(frame);
+  }
+}
+const trackPointer = modifier(TrackPointer);
 const PALETTE_WIDTH = 160;
 
 type Viewport = {
@@ -207,19 +239,35 @@ const sculptureDraggable: Draggable<State> = ({ state, d, draggedId }) => {
             dragologyZIndex={isDragged ? "/1" : 0}
             dragologyOnDrag={() => {
               const validTargets = getPlacementsForType(state, type);
-              const targetStates = validTargets.map((placed) => applyPlacedShape(state, placed));
+              // Only targets near the pointer take part in the drag (previews, snapping, ghosts).
+              // The margin covers the grab offset between the pointer and the dragged tile's center.
+              const radius = SNAP_GAP + 2 * SHAPE_DEF_MAP[type].boundingRadius;
+              const pointer: PointerSink = { current: null };
+              const nearbyKey = () => {
+                const p = pointer.current;
+                return validTargets.flatMap((t, i) => (p && Vec2(t.x, t.y).dist(p) < radius ? [i] : [])).join(",");
+              };
 
-              const overlay = (
-                <g>
-                  {validTargets.map((t, i) => (
-                    <g id={`ghost-${i}`} transform={translate(t.x, t.y) + rotateDeg(t.angle)}>
-                      <polygon points={getPolygonPoints(t.type)} fill="none" stroke="black" strokeDasharray="4 4" />
+              return d
+                .reactTo(nearbyKey, (key) => {
+                  const nearby = key === "" ? [] : key.split(",").map((i) => ({ i: Number(i), placed: validTargets[Number(i)] }));
+                  // Drag-and-drop places the full tile: drop the shared-edge marks so every edge is drawn.
+                  // (Sketch placements keep them, since the user omits edges they consider implicit.)
+                  const targetStates = nearby.length ? nearby.map(({ placed }) => applyPlacedShape(state, { ...placed, shared: undefined })) : [state];
+
+                  const overlay = (
+                    <g>
+                      {nearby.map(({ i, placed: t }) => (
+                        <g id={`ghost-${i}`} transform={translate(t.x, t.y) + rotateDeg(t.angle)}>
+                          <polygon points={getPolygonPoints(t.type)} fill="none" stroke="black" strokeDasharray="4 4" />
+                        </g>
+                      ))}
                     </g>
-                  ))}
-                </g>
-              );
+                  );
 
-              return d.closest(targetStates).whenFar(state, { gap: SNAP_GAP }).withFloating().withOverlay(overlay).onDrop(finalizePlacedState);
+                  return d.closest(targetStates).whenFar(state, { gap: SNAP_GAP }).withFloating().withOverlay(overlay).onDrop(finalizePlacedState);
+                })
+                .with(trackPointer(pointer));
             }}
           >
             <path d={getHandDrawnPaths(getLocalVertices(type), id).fill} fill={getTileFill(id)} />
